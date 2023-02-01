@@ -1,0 +1,29 @@
+version: '3.8'
+
+networks:
+  sare-network:
+
+
+services:
+  kyc-redis:
+    container_name: kyc-redis
+    image: redis:latest
+    ports:
+      - "7002:6379"
+    networks:
+      - sare-network
+  sare-kyc:
+    container_name: sare-kyc
+    build:
+      context: .
+      dockerfile: ./src/Dockerfile
+    restart: always
+    ports:
+      - '8002:80'
+    volumes:
+      - ./src:/var/www/html
+      - ./apache/default.conf:/etc/apache2/sites-enabled/000-default.conf
+    depends_on:
+      - kyc-redis
+    networks:
+      - sare-network
