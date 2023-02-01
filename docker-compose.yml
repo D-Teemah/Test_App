@@ -9,7 +9,7 @@ services:
     container_name: kyc-redis
     image: redis:latest
     ports:
-      - "7002:6379"
+      - "7004:6379"
     networks:
       - sare-network
   sare-kyc:
@@ -19,7 +19,7 @@ services:
       dockerfile: ./src/Dockerfile
     restart: always
     ports:
-      - '8002:80'
+      - '8004:80'
     volumes:
       - ./src:/var/www/html
       - ./apache/default.conf:/etc/apache2/sites-enabled/000-default.conf
