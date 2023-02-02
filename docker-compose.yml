@@ -1,9 +1,5 @@
 version: '3.8'
 
-networks:
-  sare-network:
-
-
 services:
   kyc-redis:
     container_name: kyc-redis
@@ -27,3 +23,8 @@ services:
       - kyc-redis
     networks:
       - sare-network
+networks:
+  default:
+    external:
+      name : sare-network
+      
