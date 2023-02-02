@@ -6,8 +6,6 @@ services:
     image: redis:latest
     ports:
       - "7004:6379"
-    networks:
-      - sare-network
   sare-kyc:
     container_name: sare-kyc
     build:
@@ -21,8 +19,6 @@ services:
       - ./apache/default.conf:/etc/apache2/sites-enabled/000-default.conf
     depends_on:
       - kyc-redis
-    networks:
-      - sare-network
 networks:
   default:
     external:
