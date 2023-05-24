@@ -1,0 +1,78 @@
+---
+workflow:
+  rules:
+    - if: $CI_COMMIT_BRANCH != "main"
+      when: never
+    - when: always
+
+variables:
+  DOCKER_REGISTRY: $DOCKER_REGISTRY
+  APP_NAME: sarepay_kyc
+  DOCKER_HOST: tcp://docker:2375
+  ECR_USERNAME: AWS
+  AWS_DEFAULT_REGION: us-east-1
+  DOCKERFILE_DIR: ${CI_PROJECT_DIR}/src
+  PARENT_DIR: ${CI_PROJECT_DIR}
+  TASK_DEFINITION_NAME: sarepay-kyc
+  SERVICE_NAME: sarepay-kyc
+  CLUSTER_NAME: sarepay-ecs-cluster
+  SECRET_ARN: arn:aws:secretsmanager:us-east-1:043970023913:secret:prod-services-YZ84TE
+  ENVFILE: .env
+
+stages:
+  - build
+  - deploy
+
+build:
+  stage: build
+  image: 
+    name: amazon/aws-cli
+    entrypoint: [""]
+  services:
+    - docker:dind
+  before_script:
+    - amazon-linux-extras install docker
+    - amazon-linux-extras install php8.1
+    - php -v
+    - aws --version
+    - docker --version
+    - yum -y install php-cli unzip
+    - yum -y install jq
+    - cd ${DOCKERFILE_DIR}
+
+  script:
+    - aws secretsmanager get-secret-value --secret-id $SECRET_ARN --region $AWS_DEFAULT_REGION | jq -r '.SecretString' | jq -r "to_entries|map(\"\(.key)=\\\"\(.value|tostring)\\\"\")|.[]" > $ENVFILE
+    - cd ${PARENT_DIR}
+    - docker build -t ${DOCKER_REGISTRY}/${APP_NAME}:$CI_PIPELINE_IID -f ${DOCKERFILE_DIR}/Dockerfile .
+    - aws ecr get-login-password | docker login --username ${ECR_USERNAME} --password-stdin ${DOCKER_REGISTRY}
+    - docker push ${DOCKER_REGISTRY}/${APP_NAME}:$CI_PIPELINE_IID
+  cache:
+    paths:
+      - vendor/
+  only:
+    - main
+
+deploy:
+  stage: deploy
+  dependencies:
+    - build
+  image: 
+    name: amazon/aws-cli
+    entrypoint: [""]
+  services:
+    - docker:dind
+  before_script:
+    - amazon-linux-extras install docker
+    - aws --version
+    - yum -y install jq
+  script:
+    - echo ${DOCKER_REGISTRY}/${APP_NAME}:$CI_PIPELINE_IID
+    - TASK_DEFINITION=$(aws ecs describe-task-definition --task-definition "$TASK_DEFINITION_NAME" --region "${AWS_DEFAULT_REGION}")
+    - NEW_CONTAINER_DEFINTIION=$(echo $TASK_DEFINITION | jq --arg IMAGE "${DOCKER_REGISTRY}/${APP_NAME}:$CI_PIPELINE_IID" '.taskDefinition.containerDefinitions[0] |= ( .image = $IMAGE | .secrets = []) | .taskDefinition.containerDefinitions[0]')
+    # - NEW_CONTAINER_DEFINTIION=$(echo $TASK_DEFINITION | jq --arg IMAGE "${DOCKER_REGISTRY}/${APP_NAME}:$CI_PIPELINE_IID" --arg NAME prod-services:$CI_PIPELINE_IID --arg SECRET_ARN "${SECRET_ARN}" '.taskDefinition.containerDefinitions[0] |= ( .image = $IMAGE | .secrets = [{name:"APP_NAME", valueFrom:$SECRET_ARN },{name:"APP_ENV", valueFrom:$SECRET_ARN },{name:"APP_DEBUG", valueFrom:$SECRET_ARN },{name:"APP_URL", valueFrom:$SECRET_ARN },{name:"APP_KEY", valueFrom:$SECRET_ARN },{name:"SITE_KEY", valueFrom:$SECRET_ARN },{name:"AUTHORIZED_KEY", valueFrom:$SECRET_ARN },{name:"PORTAL_TYPE", valueFrom:$SECRET_ARN },{name:"DB_CONNECTION", valueFrom:$SECRET_ARN },{name:"DB_HOST", valueFrom:$SECRET_ARN },{name:"DB_PORT", valueFrom:$SECRET_ARN },{name:"DB_DATABASE", valueFrom:$SECRET_ARN },{name:"DB_USERNAME", valueFrom:$SECRET_ARN },{name:"DB_PASSWORD", valueFrom:$SECRET_ARN }] ) | .taskDefinition.containerDefinitions[0]')
+    - echo "Registering new container definition..."
+    - aws ecs register-task-definition --region "${AWS_DEFAULT_REGION}" --family "${TASK_DEFINITION_NAME}" --container-definitions "${NEW_CONTAINER_DEFINTIION}" --memory 512 --requires-compatibilities "FARGATE" --network-mode awsvpc --execution-role-arn arn:aws:iam::043970023913:role/sarepay-core-task-execution-role --cpu 256 --task-role-arn arn:aws:iam::043970023913:role/sarepay-core-task-role
+    - echo "Updating the service..."
+    - aws ecs update-service --region "${AWS_DEFAULT_REGION}" --cluster "${CLUSTER_NAME}" --service "${SERVICE_NAME}"  --task-definition "${TASK_DEFINITION_NAME}"
+  only:
+    - main
