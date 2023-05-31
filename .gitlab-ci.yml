@@ -18,10 +18,14 @@ variables:
   CLUSTER_NAME: sarepay-ecs-cluster
   SECRET_ARN: arn:aws:secretsmanager:us-east-1:043970023913:secret:prod-services-YZ84TE
   ENVFILE: .env
+  TASK_DEFINITION_NAME_PROD: sarepay-kyc-production
+  SERVICE_NAME_PROD: sarepay-kyc-production
+  CLUSTER_NAME_PROD: sarepay-ecs-cluster-production
 
 stages:
   - build
-  - deploy
+  - deploy-staging
+  - deploy-production
 
 build:
   stage: build
@@ -52,8 +56,8 @@ build:
   only:
     - main
 
-deploy:
-  stage: deploy
+deploy-staging:
+  stage: deploy-staging
   dependencies:
     - build
   image: 
@@ -76,3 +80,30 @@ deploy:
     - aws ecs update-service --region "${AWS_DEFAULT_REGION}" --cluster "${CLUSTER_NAME}" --service "${SERVICE_NAME}"  --task-definition "${TASK_DEFINITION_NAME}"
   only:
     - main
+
+
+deploy-production:
+  stage: deploy-production
+  dependencies:
+    - deploy-staging
+  image: 
+    name: amazon/aws-cli
+    entrypoint: [""]
+  services:
+    - docker:dind
+  before_script:
+    - amazon-linux-extras install docker
+    - aws --version
+    - yum -y install jq
+  script:
+    - echo ${DOCKER_REGISTRY}/${APP_NAME}:$CI_PIPELINE_IID
+    - TASK_DEFINITION=$(aws ecs describe-task-definition --task-definition "$TASK_DEFINITION_NAME_PROD" --region "${AWS_DEFAULT_REGION}")
+    - NEW_CONTAINER_DEFINTIION=$(echo $TASK_DEFINITION | jq --arg IMAGE "${DOCKER_REGISTRY}/${APP_NAME}:$CI_PIPELINE_IID" '.taskDefinition.containerDefinitions[0] |= ( .image = $IMAGE | .secrets = []) | .taskDefinition.containerDefinitions[0]')
+    # - NEW_CONTAINER_DEFINTIION=$(echo $TASK_DEFINITION | jq --arg IMAGE "${DOCKER_REGISTRY}/${APP_NAME}:$CI_PIPELINE_IID" --arg NAME prod-services:$CI_PIPELINE_IID --arg SECRET_ARN "${SECRET_ARN}" '.taskDefinition.containerDefinitions[0] |= ( .image = $IMAGE | .secrets = [{name:"APP_NAME", valueFrom:$SECRET_ARN },{name:"APP_ENV", valueFrom:$SECRET_ARN },{name:"APP_DEBUG", valueFrom:$SECRET_ARN },{name:"APP_URL", valueFrom:$SECRET_ARN },{name:"APP_KEY", valueFrom:$SECRET_ARN },{name:"SITE_KEY", valueFrom:$SECRET_ARN },{name:"AUTHORIZED_KEY", valueFrom:$SECRET_ARN },{name:"PORTAL_TYPE", valueFrom:$SECRET_ARN },{name:"DB_CONNECTION", valueFrom:$SECRET_ARN },{name:"DB_HOST", valueFrom:$SECRET_ARN },{name:"DB_PORT", valueFrom:$SECRET_ARN },{name:"DB_DATABASE", valueFrom:$SECRET_ARN },{name:"DB_USERNAME", valueFrom:$SECRET_ARN },{name:"DB_PASSWORD", valueFrom:$SECRET_ARN }] ) | .taskDefinition.containerDefinitions[0]')
+    - echo "Registering new container definition..."
+    - aws ecs register-task-definition --region "${AWS_DEFAULT_REGION}" --family "${TASK_DEFINITION_NAME_PROD}" --container-definitions "${NEW_CONTAINER_DEFINTIION}" --memory 512 --requires-compatibilities "FARGATE" --network-mode awsvpc --execution-role-arn arn:aws:iam::043970023913:role/sarepay-kyc-production-task-execution-role --cpu 256 --task-role-arn arn:aws:iam::043970023913:role/sarepay-kyc-production-task-role
+    - echo "Updating the service..."
+    - aws ecs update-service --region "${AWS_DEFAULT_REGION}" --cluster "${CLUSTER_NAME_PROD}" --service "${SERVICE_NAME_PROD}"  --task-definition "${TASK_DEFINITION_NAME_PROD}"
+  only:
+    - main
+  when: manual
