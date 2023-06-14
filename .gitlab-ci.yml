@@ -21,13 +21,44 @@ variables:
   TASK_DEFINITION_NAME_PROD: sarepay-kyc-production
   SERVICE_NAME_PROD: sarepay-kyc-production
   CLUSTER_NAME_PROD: sarepay-ecs-cluster-production
+  APP_NAME_PROD: sarepay_kyc_production
+  SECRET_ARN_STAGING: arn:aws:secretsmanager:us-east-1:043970023913:secret:sarepay-staging-myg3lh
 
 stages:
   - build
   - deploy-staging
   - deploy-production
 
-build:
+build-staging:
+  stage: build
+  image: 
+    name: amazon/aws-cli
+    entrypoint: [""]
+  services:
+    - docker:dind
+  before_script:
+    - amazon-linux-extras install docker
+    - amazon-linux-extras install php8.1
+    - php -v
+    - aws --version
+    - docker --version
+    - yum -y install php-cli unzip
+    - yum -y install jq
+    - cd ${DOCKERFILE_DIR}
+
+  script:
+    - aws secretsmanager get-secret-value --secret-id $SECRET_ARN_STAGING --region $AWS_DEFAULT_REGION | jq -r '.SecretString' | jq -r "to_entries|map(\"\(.key)=\\\"\(.value|tostring)\\\"\")|.[]" > $ENVFILE
+    - cd ${PARENT_DIR}
+    - docker build -t ${DOCKER_REGISTRY}/${APP_NAME}:$CI_PIPELINE_IID -f ${DOCKERFILE_DIR}/Dockerfile .
+    - aws ecr get-login-password | docker login --username ${ECR_USERNAME} --password-stdin ${DOCKER_REGISTRY}
+    - docker push ${DOCKER_REGISTRY}/${APP_NAME}:$CI_PIPELINE_IID
+  cache:
+    paths:
+      - vendor/
+  only:
+    - main
+
+build-production:
   stage: build
   image: 
     name: amazon/aws-cli
@@ -47,19 +78,20 @@ build:
   script:
     - aws secretsmanager get-secret-value --secret-id $SECRET_ARN --region $AWS_DEFAULT_REGION | jq -r '.SecretString' | jq -r "to_entries|map(\"\(.key)=\\\"\(.value|tostring)\\\"\")|.[]" > $ENVFILE
     - cd ${PARENT_DIR}
-    - docker build -t ${DOCKER_REGISTRY}/${APP_NAME}:$CI_PIPELINE_IID -f ${DOCKERFILE_DIR}/Dockerfile .
+    - docker build -t ${DOCKER_REGISTRY}/${APP_NAME_PROD}:$CI_PIPELINE_IID -f ${DOCKERFILE_DIR}/Dockerfile .
     - aws ecr get-login-password | docker login --username ${ECR_USERNAME} --password-stdin ${DOCKER_REGISTRY}
-    - docker push ${DOCKER_REGISTRY}/${APP_NAME}:$CI_PIPELINE_IID
+    - docker push ${DOCKER_REGISTRY}/${APP_NAME_PROD}:$CI_PIPELINE_IID
   cache:
     paths:
       - vendor/
   only:
     - main
 
+
 deploy-staging:
   stage: deploy-staging
   dependencies:
-    - build
+    - build-staging
   image: 
     name: amazon/aws-cli
     entrypoint: [""]
@@ -85,6 +117,7 @@ deploy-staging:
 deploy-production:
   stage: deploy-production
   dependencies:
+    - build-production
     - deploy-staging
   image: 
     name: amazon/aws-cli
@@ -96,9 +129,9 @@ deploy-production:
     - aws --version
     - yum -y install jq
   script:
-    - echo ${DOCKER_REGISTRY}/${APP_NAME}:$CI_PIPELINE_IID
+    - echo ${DOCKER_REGISTRY}/${APP_NAME_PROD}:$CI_PIPELINE_IID
     - TASK_DEFINITION=$(aws ecs describe-task-definition --task-definition "$TASK_DEFINITION_NAME_PROD" --region "${AWS_DEFAULT_REGION}")
-    - NEW_CONTAINER_DEFINTIION=$(echo $TASK_DEFINITION | jq --arg IMAGE "${DOCKER_REGISTRY}/${APP_NAME}:$CI_PIPELINE_IID" '.taskDefinition.containerDefinitions[0] |= ( .image = $IMAGE | .secrets = []) | .taskDefinition.containerDefinitions[0]')
+    - NEW_CONTAINER_DEFINTIION=$(echo $TASK_DEFINITION | jq --arg IMAGE "${DOCKER_REGISTRY}/${APP_NAME_PROD}:$CI_PIPELINE_IID" '.taskDefinition.containerDefinitions[0] |= ( .image = $IMAGE | .secrets = []) | .taskDefinition.containerDefinitions[0]')
     # - NEW_CONTAINER_DEFINTIION=$(echo $TASK_DEFINITION | jq --arg IMAGE "${DOCKER_REGISTRY}/${APP_NAME}:$CI_PIPELINE_IID" --arg NAME prod-services:$CI_PIPELINE_IID --arg SECRET_ARN "${SECRET_ARN}" '.taskDefinition.containerDefinitions[0] |= ( .image = $IMAGE | .secrets = [{name:"APP_NAME", valueFrom:$SECRET_ARN },{name:"APP_ENV", valueFrom:$SECRET_ARN },{name:"APP_DEBUG", valueFrom:$SECRET_ARN },{name:"APP_URL", valueFrom:$SECRET_ARN },{name:"APP_KEY", valueFrom:$SECRET_ARN },{name:"SITE_KEY", valueFrom:$SECRET_ARN },{name:"AUTHORIZED_KEY", valueFrom:$SECRET_ARN },{name:"PORTAL_TYPE", valueFrom:$SECRET_ARN },{name:"DB_CONNECTION", valueFrom:$SECRET_ARN },{name:"DB_HOST", valueFrom:$SECRET_ARN },{name:"DB_PORT", valueFrom:$SECRET_ARN },{name:"DB_DATABASE", valueFrom:$SECRET_ARN },{name:"DB_USERNAME", valueFrom:$SECRET_ARN },{name:"DB_PASSWORD", valueFrom:$SECRET_ARN }] ) | .taskDefinition.containerDefinitions[0]')
     - echo "Registering new container definition..."
     - aws ecs register-task-definition --region "${AWS_DEFAULT_REGION}" --family "${TASK_DEFINITION_NAME_PROD}" --container-definitions "${NEW_CONTAINER_DEFINTIION}" --memory 512 --requires-compatibilities "FARGATE" --network-mode awsvpc --execution-role-arn arn:aws:iam::043970023913:role/sarepay-kyc-production-task-execution-role --cpu 256 --task-role-arn arn:aws:iam::043970023913:role/sarepay-kyc-production-task-role
