@@ -1,9 +1,7 @@
 ---
-workflow:
-  rules:
-    - if: $CI_COMMIT_BRANCH != "main"
-      when: never
-    - when: always
+include:
+  - template: Code-Quality.gitlab-ci.yml
+  - template: Jobs/SAST.latest.gitlab-ci.yml
 
 variables:
   DOCKER_REGISTRY: $DOCKER_REGISTRY
@@ -23,11 +21,35 @@ variables:
   CLUSTER_NAME_PROD: sarepay-ecs-cluster-production
   APP_NAME_PROD: sarepay_kyc_production
   SECRET_ARN_STAGING: arn:aws:secretsmanager:us-east-1:043970023913:secret:sarepay-staging-myg3lh
+  SAST_EXCLUDED_ANALYZERS: "spotbugs,brakeman,flawfinder,kubesec,mobsf,nodejs-scan,semgrep,spotbugs"
 
 stages:
+  - test
   - build
   - deploy-staging
   - deploy-production
+
+code_quality:
+  stage: test
+  image: docker:stable
+  allow_failure: false
+  services:
+    - docker:stable-dind
+  variables:
+    DOCKER_DRIVER: overlay2
+    DOCKER_TLS_CERTDIR: ""
+  script:
+    - docker run
+        --env SOURCE_CODE="$PWD"
+        --volume "$PWD":/code
+        --volume /var/run/docker.sock:/var/run/docker.sock
+        "registry.gitlab.com/gitlab-org/security-products/codequality:12-3-stable" /code
+  artifacts:
+    reports:
+      codequality: gl-code-quality-report.json
+    expire_in: 1 week
+  rules:
+    - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
 
 build-staging:
   stage: build
