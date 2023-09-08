@@ -16,3 +16,5 @@ use Illuminate\Support\Facades\Route;
 Route::get('/', function () {
     return response()->json('We Are Good '. env('SERVICE_NAME'));
 });
+
+Route::get('health', [\App\Http\Controllers\HealthCheckController::class, 'health'])->name('health');
