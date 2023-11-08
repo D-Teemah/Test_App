@@ -18,7 +18,9 @@ class ApiKeyMiddleware
      */
     private function isValid($secret_key)
     {
-        $user =  User::where('secret_key', $secret_key)->first();
+        $secretKey = $this->merchantSecretKeyEncryption($secret_key);
+        $user =  User::where('secret_key', $secret_key)->orWhere('secret_key', $secretKey)->first();
+
 
         if ($user) {
             session()->put('current_user', $user);
@@ -43,4 +45,13 @@ class ApiKeyMiddleware
 
         return $next($request);
     }
+
+    private function merchantSecretKeyEncryption(string $secretKey)
+    {
+        //using opensslEncryption Algo
+        $iv = config('encryption.ENCRYPTION_IV');
+        $encryptionKey = config('encryption.ENCRYPTION_KEY');
+        return openssl_encrypt($secretKey, 'AES-128-CBC', $encryptionKey, 0, $iv);
+    }
+
 }
